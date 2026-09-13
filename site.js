@@ -1626,119 +1626,197 @@ function ordinalSuffix(n) {
 // ==============================
 
 function renderTeams() {
-  const rankingBody = document.querySelector("#team-ranking-rows");
-  const detailBody = document.querySelector("#team-rows");
+  const rankingBody =
+    document.querySelector(
+      "#team-ranking-rows"
+    ) ||
+    document.querySelector(
+      "#ranking-rows"
+    );
 
-  if (!rankingBody && !detailBody) {
-    return;
-  }
+  const detailBody =
+    document.querySelector(
+      "#team-rows"
+    ) ||
+    document.querySelector(
+      "#teams-rows"
+    );
 
-  const rankings = teamRankings();
+  const rankings =
+    teamRankings();
+
+  // ============================
+  // TEAM RANKINGS
+  // ============================
 
   if (rankingBody) {
-    rankingBody.innerHTML = rankings.map(t => `
-      <tr>
-        <td>${t.rank}</td>
-        <td>${escapeHtml(t.name)}</td>
-        <td>${Number.isFinite(t.averagePlace) ? t.averagePlace.toFixed(2) : "—"}</td>
-        <td>${Number.isFinite(t.totalScore) ? t.totalScore : "—"}</td>
-        <td>${t.meets || 0}</td>
-      </tr>
-    `).join("");
+    rankingBody.innerHTML =
+      rankings
+        .map(t => {
+          const avg =
+            t.average === null
+              ? "—"
+              : t.average.toFixed(1);
+
+          return `
+            <tr>
+              <td>
+                <strong>
+                  ${t.rank}
+                </strong>
+              </td>
+
+              <td>
+                <strong>
+                  ${esc(t.name)}
+                </strong>
+              </td>
+
+              <td>
+                ${
+                  t.meets
+                    ? t.seasonPoints
+                    : "—"
+                }
+              </td>
+
+              <td>
+                ${avg}
+              </td>
+
+              <td>
+                ${t.meets}
+              </td>
+            </tr>
+          `;
+        })
+        .join("") ||
+      `
+        <tr>
+          <td colspan="5">
+            No teams found.
+          </td>
+        </tr>
+      `;
   }
 
-  if (detailBody) {
-    detailBody.innerHTML = rankings.map(t => `
-      <tr>
-        <td>${escapeHtml(t.name)}</td>
-        <td>${t.rank}</td>
-        <td>${Number.isFinite(t.averagePlace) ? t.averagePlace.toFixed(2) : "—"}</td>
-        <td>${Number.isFinite(t.totalScore) ? t.totalScore : "—"}</td>
-        <td>${t.meets || 0}</td>
-      </tr>
-    `).join("");
-  }
-}
-
+  // ============================
+  // TEAM DETAILS
+  // ============================
 
   if (detailBody) {
-    detailBody.innerHTML = DATA.Teams
-      .map(t => {
-        const name = firstValue(t, ["Team"]);
-        const m1 = firstValue(t, ["Manager 1", "Manager"]);
-        const m2 = firstValue(t, ["Manager 2"]);
-        const ranking = rankings.find(x => x.name === name);
+    detailBody.innerHTML =
+      DATA.Teams
+        .map(t => {
+          const name =
+            firstValue(
+              t,
+              ["Team"]
+            );
 
-        const roster = DATA.Players
-          .filter(p =>
-            firstValue(p, ["Team", "Fantasy Team"]) === name
-          )
-          .map(playerLink)
-          .join("") ||
-          `<span class="team-empty">No players listed</span>`;
+          const m1 =
+            firstValue(
+              t,
+              [
+                "Manager 1",
+                "Manager"
+              ]
+            );
 
-        const meetHistory =
-          ranking && ranking.meetScores.length
-            ? ranking.meetScores
-                .map(x => `
-                  <div class="team-meet-result">
-                    <span>${esc(x.meet)}</span>
-                    <strong>${x.teamPlace}${ordinalSuffix(x.teamPlace)}</strong>
-                    <span>${x.score} pts</span>
-                  </div>
-                `)
-                .join("")
-            : `<div class="team-empty">No completed meet results yet.</div>`;
+          const m2 =
+            firstValue(
+              t,
+              ["Manager 2"]
+            );
 
-        const average =
-          ranking && ranking.averagePlace !== null
-            ? ranking.averagePlace.toFixed(1)
-            : "—";
+          const ranking =
+            rankings.find(
+              x =>
+                x.name === name
+            );
 
-        return `
-          <article class="team-card">
-            <div class="team-card-header">
-              <div>
-                <div class="team-card-kicker">Team</div>
-                <h3>${esc(name)}</h3>
-              </div>
-              <div class="team-rank-badge">
-                ${ranking ? `#${ranking.rank}` : "—"}
-              </div>
-            </div>
+          const roster =
+            DATA.Players
+              .filter(
+                p =>
+                  firstValue(
+                    p,
+                    [
+                      "Team",
+                      "Fantasy Team"
+                    ]
+                  ) === name
+              )
+              .map(playerLink)
+              .join(", ") ||
+            "No players listed";
 
-            <div class="team-card-meta">
-              <div>
-                <span>Managers</span>
-                <strong>${esc([m1, m2].filter(Boolean).join(" & ") || "—")}</strong>
-              </div>
-              <div>
-                <span>Average Place</span>
-                <strong>${average}</strong>
-              </div>
-              <div>
-                <span>Meets Scored</span>
-                <strong>${ranking ? ranking.meets : 0}</strong>
-              </div>
-            </div>
+          const meetHistory =
+            ranking &&
+            ranking.meetScores.length
+              ? ranking.meetScores
+                  .map(
+                    x =>
+                      `${esc(x.meet)}: <strong>${x.score}</strong>`
+                  )
+                  .join(" · ")
+              : "No completed meet scores yet";
 
-            <div class="team-card-section">
-              <h4>Current Roster</h4>
-              <div class="team-roster-grid">
+          return `
+            <tr>
+
+              <td>
+                <strong>
+                  ${esc(name)}
+                </strong>
+              </td>
+
+              <td>
+                ${esc(m1)}
+              </td>
+
+              <td>
+                ${esc(m2)}
+              </td>
+
+              <td>
+                ${
+                  ranking
+                    ? ranking.rank
+                    : "—"
+                }
+              </td>
+
+              <td>
+                ${
+                  ranking &&
+                  ranking.meets
+                    ? ranking.seasonPoints
+                    : "—"
+                }
+              </td>
+
+              <td>
+                ${
+                  ranking &&
+                  ranking.average !== null
+                    ? ranking.average.toFixed(1)
+                    : "—"
+                }
+              </td>
+
+              <td>
                 ${roster}
-              </div>
-            </div>
 
-            <div class="team-card-section">
-              <h4>Meet History</h4>
-              <div class="team-meet-results">
-                ${meetHistory}
-              </div>
-            </div>
-          </article>
-        `;
-      })
-      .join("");
+                <div class="team-history">
+                  ${meetHistory}
+                </div>
+              </td>
+
+            </tr>
+          `;
+        })
+        .join("");
   }
 }
 
