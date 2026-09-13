@@ -427,7 +427,7 @@ function averagePoints(p) {
 // raced that meet becomes the team's
 // one IR replacement.
 
-function getIRReplacement(team, id) {
+function getIRReplacements(team, id) {
   const teamRows = meetResults(id).filter(r => {
     const p = DATA.Players.find(
       x => playerId(x) === resultPlayerId(r)
@@ -438,19 +438,17 @@ function getIRReplacement(team, id) {
 
   const dnsCount = teamRows.filter(isDNS).length;
 
-  // No IR replacements unless the team has 3+ DNS runners.
-  if (dnsCount < 3) {
+  // Every three DNS runners earns one IR replacement.
+  // 3 DNS = 1 replacement, 6 DNS = 2, 9 DNS = 3, etc.
+  const replacementCount = Math.floor(dnsCount / 3);
+
+  if (replacementCount < 1) {
     return [];
   }
 
-  // 3 DNS = 1 replacement
-  // 6 DNS = 2 replacements
-  // 9 DNS = 3 replacements, etc.
-  const replacementCount = Math.floor(dnsCount / 3);
-
   const eligibleIR = meetResults(id)
     .filter(r => {
-      // DNS IR runners cannot be replacements.
+      // DNS runners did not participate and cannot be used.
       if (isDNS(r)) {
         return false;
       }
@@ -463,30 +461,29 @@ function getIRReplacement(team, id) {
         return false;
       }
 
-      // Blank historical Team means the runner was IR
-      // for this specific meet.
+      // Blank Team on the Results row means the runner was IR
+      // for this particular meet.
       const historicalTeam = resultTeam(r, p || {});
 
-      return String(historicalTeam || "").trim() === "";
+      return String(historicalTeam || '').trim() === '';
     });
 
-  // Fastest IR finishers first.
+  // Fastest IR finishers are preferred.
   const finishedIR = eligibleIR
     .filter(r => !isDNF(r))
     .filter(r =>
       Number.isFinite(
-        raceTimeSeconds(firstValue(r, ["Time"]))
+        raceTimeSeconds(firstValue(r, ['Time']))
       )
     )
     .map(r => ({
       ...r,
-      _time: raceTimeSeconds(firstValue(r, ["Time"])),
+      _time: raceTimeSeconds(firstValue(r, ['Time'])),
       _isIRReplacement: true
     }))
     .sort((a, b) => a._time - b._time);
 
-  // DNF IR runners are eligible if we need more replacements
-  // than there are IR runners who finished.
+  // DNF IR runners are eligible after all IR finishers.
   const dnfIR = eligibleIR
     .filter(r => isDNF(r))
     .map(r => ({
@@ -494,10 +491,7 @@ function getIRReplacement(team, id) {
       _isIRReplacement: true
     }));
 
-  return [
-    ...finishedIR,
-    ...dnfIR
-  ].slice(0, replacementCount);
+  return [...finishedIR, ...dnfIR].slice(0, replacementCount);
 }
 
 // ==============================
@@ -507,7 +501,8 @@ function getIRReplacement(team, id) {
 function buildTeamMeet(teamName, meetId) {
   const allResults = meetResults(meetId);
 
-  // Get every runner assigned to this fantasy team for this meet.
+  // Get every runner assigned to this fantasy team for THIS meet.
+  // Historical team assignment comes only from the Results sheet.
   const teamResults = allResults
     .map(r => {
       const p = DATA.Players.find(
@@ -523,8 +518,6 @@ function buildTeamMeet(teamName, meetId) {
     })
     .filter(r => r.player && r.team === teamName);
 
-  // Race places are calculated from EVERY finisher in the meet,
-  // not just the runners on this fantasy team.
   const places = racePlaces(meetId);
 
   const finished = teamResults
@@ -539,43 +532,67 @@ function buildTeamMeet(teamName, meetId) {
   const dnfs = teamResults.filter(r => isDNF(r));
   const dns = teamResults.filter(r => isDNS(r));
 
-  // DNF runners are always after the team's finished runners.
+  // The normal scoring order is finishers first, then DNFs.
+  // DNS runners do not score.
   const ordered = [...finished, ...dnfs];
 
-const irReplacements = getIRReplacement(teamName, meetId);
+  // IR replacements are available to replace DNS slots for tie-breaking.
+  const irReplacements = getIRReplacements(teamName, meetId);
 
-irReplacements.forEach(ir => {
-  const irPlayer = DATA.Players.find(
-    p => playerId(p) === resultPlayerId(ir)
+  const tieBreakRunners = [...ordered];
+  const usedIR = [];
+
+  // A DNS can occupy a tie-break slot, but when an IR replacement is
+  // available, the replacement takes that DNS runner's slot.
+  const maxDnsReplacements = Math.min(
+    irReplacements.length,
+    dns.length
   );
 
-  ordered.push({
-    ...ir,
-    player: irPlayer || null,
-    team: "",
-    status: resultStatus(ir),
-    racePlace: places.get(resultPlayerId(ir)) ?? null,
-    _isIRReplacement: true
-  });
-});
+  for (let i = 0; i < maxDnsReplacements; i++) {
+    const ir = irReplacements[i];
+    const irPlayer = DATA.Players.find(
+      p => playerId(p) === resultPlayerId(ir)
+    );
 
-  // The first five runners are the scoring runners.
-  const scoring = ordered.slice(0, 5);
+    usedIR.push({
+      ...ir,
+      player: irPlayer || null,
+      team: '',
+      status: resultStatus(ir),
+      racePlace: places.get(resultPlayerId(ir)) ?? null,
+      _isIRReplacement: true
+    });
+  }
+
+  // For the displayed team scoring, IR replacements are real runners and
+  // are placed into the team's runner order. DNS remains displayed as DNS.
+  usedIR.forEach(ir => {
+    ordered.push(ir);
+  });
+
+  const finalOrdered = ordered
+    .filter(r => !isDNF(r))
+    .sort((a, b) => {
+      const ap = Number.isFinite(a.racePlace) ? a.racePlace : Infinity;
+      const bp = Number.isFinite(b.racePlace) ? b.racePlace : Infinity;
+      return ap - bp;
+    })
+    .concat(ordered.filter(r => isDNF(r)));
+
+  finalOrdered.forEach((r, i) => {
+    r.teamPlace = i + 1;
+  });
+
+  // The first five runners score.
+  const scoring = finalOrdered.slice(0, 5);
 
   // Runners after the first five are displacers.
-  const extra = ordered.slice(5);
+  const extra = finalOrdered.slice(5);
 
-  // Team score = the ACTUAL overall race places of the first five.
-  //
-  // Example:
-  // 2nd + 7th + 12th + 18th + 25th = 64.
-  //
-  // A DNF has no actual race place, so it is treated as the
-  // team's last runner and receives a penalty place after all
-  // finishers in the meet.
   const finishedCount = places.size;
 
-  const score = scoring.reduce((sum, r, index) => {
+  const score = scoring.reduce((sum, r) => {
     if (Number.isFinite(r.racePlace)) {
       return sum + r.racePlace;
     }
@@ -587,6 +604,27 @@ irReplacements.forEach(ir => {
     return sum;
   }, 0);
 
+  // Tie-break order is deliberately separate from scoring order.
+  // It includes DNS slots after all real runners, so a DNS at 6th/7th/etc.
+  // can be replaced by an eligible IR runner when two teams are tied.
+  const tieBreakOrder = [
+    ...finalOrdered,
+    ...dns
+  ];
+
+  // Replace DNS slots in order with the available IR replacements.
+  // This lets the tie-breaker go 6th -> 7th -> 8th until the available
+  // replacement pool is exhausted.
+  for (let i = 0; i < usedIR.length; i++) {
+    const dnsIndex = tieBreakOrder.findIndex(r => isDNS(r));
+
+    if (dnsIndex === -1) {
+      break;
+    }
+
+    tieBreakOrder[dnsIndex] = usedIR[i];
+  }
+
   return {
     team: teamName,
     score,
@@ -594,7 +632,9 @@ irReplacements.forEach(ir => {
     extra,
     displacers: extra,
     dns,
-    rows: teamResults
+    rows: teamResults,
+    ordered: finalOrdered,
+    tieBreakOrder
   };
 }
 
@@ -694,10 +734,69 @@ function meetIsCompleted(m) {
 }
 
 
+function teamTieBreakValue(r, finishedCount) {
+  if (!r) {
+    return null;
+  }
+
+  if (Number.isFinite(r.racePlace)) {
+    return r.racePlace;
+  }
+
+  if (isDNF(r)) {
+    // DNF is the last runner for tie-breaking too.
+    return finishedCount + 1;
+  }
+
+  return null;
+}
+
+
+function compareTeamResults(a, b, finishedCount) {
+  // First compare the normal five-runner team score.
+  if (a.score !== b.score) {
+    return a.score - b.score;
+  }
+
+  // XC tie-breaker: compare the 6th runner, then 7th, then 8th, etc.
+  // A DNF counts as the last runner. A DNS gets an IR replacement when
+  // one is available. If both runners at a slot are exactly tied, continue.
+  const aRunners = a.teamData.tieBreakOrder || [];
+  const bRunners = b.teamData.tieBreakOrder || [];
+
+  const max = Math.max(aRunners.length, bRunners.length);
+
+  for (let i = 5; i < max; i++) {
+    const av = teamTieBreakValue(aRunners[i], finishedCount);
+    const bv = teamTieBreakValue(bRunners[i], finishedCount);
+
+    if (av === null && bv === null) {
+      continue;
+    }
+
+    if (av === null) {
+      return 1;
+    }
+
+    if (bv === null) {
+      return -1;
+    }
+
+    if (av !== bv) {
+      return av - bv;
+    }
+  }
+
+  // Exact tie after every available runner has been compared.
+  return 0;
+}
+
 function meetTeamRankings(meetId) {
-  return DATA.Teams
+  const finishedCount = racePlaces(meetId).size;
+
+  const rankings = DATA.Teams
     .map(t => {
-      const name = firstValue(t, ["Team"]);
+      const name = firstValue(t, ['Team']);
       const td = buildTeamMeet(name, meetId);
 
       return {
@@ -709,20 +808,36 @@ function meetTeamRankings(meetId) {
     })
     .filter(x => x.scored)
     .sort((a, b) => {
-      if (a.score !== b.score) {
-        return a.score - b.score;
-      }
-      return a.name.localeCompare(b.name);
-    })
-    .map((x, i, arr) => ({
-      ...x,
-      place:
-        i > 0 && x.score === arr[i - 1].score
-          ? arr[i - 1].place
-          : i + 1
-    }));
-}
+      const tieResult = compareTeamResults(
+        a,
+        b,
+        finishedCount
+      );
 
+      // Keep exact ties adjacent without using team name to determine
+      // their official placing.
+      return tieResult;
+    });
+
+  // Competition ranking: exact ties share the same place and the next
+  // team skips ahead accordingly (1, 2, 2, 4).
+  return rankings.map((x, i, arr) => {
+    const tiedWithPrevious =
+      i > 0 &&
+      compareTeamResults(
+        x,
+        arr[i - 1],
+        finishedCount
+      ) === 0;
+
+    return {
+      ...x,
+      place: tiedWithPrevious
+        ? arr[i - 1].place
+        : i + 1
+    };
+  });
+}
 
 function teamRankings() {
   const completed = DATA.Meets.filter(meetIsCompleted);
