@@ -1626,41 +1626,40 @@ function ordinalSuffix(n) {
 // ==============================
 
 function renderTeams() {
-  const rankingBody =
-    document.querySelector("#team-ranking-rows") ||
-    document.querySelector("#ranking-rows");
+  const rankingBody = document.querySelector("#team-ranking-rows");
+  const detailBody = document.querySelector("#team-rows");
 
-  const detailBody =
-    document.querySelector("#team-rows") ||
-    document.querySelector("#teams-rows");
+  if (!rankingBody && !detailBody) {
+    return;
+  }
 
   const rankings = teamRankings();
 
   if (rankingBody) {
-    rankingBody.innerHTML =
-      rankings
-        .map(t => {
-          const avg =
-            t.averagePlace === null
-              ? "—"
-              : t.averagePlace.toFixed(1);
-
-          return `
-            <tr>
-              <td><strong>${t.rank}</strong></td>
-              <td><strong>${esc(t.name)}</strong></td>
-              <td>${avg}</td>
-              <td>${t.meets}</td>
-            </tr>
-          `;
-        })
-        .join("") ||
-      `
-        <tr>
-          <td colspan="4">No teams found.</td>
-        </tr>
-      `;
+    rankingBody.innerHTML = rankings.map(t => `
+      <tr>
+        <td>${t.rank}</td>
+        <td>${escapeHtml(t.name)}</td>
+        <td>${Number.isFinite(t.averagePlace) ? t.averagePlace.toFixed(2) : "—"}</td>
+        <td>${Number.isFinite(t.totalScore) ? t.totalScore : "—"}</td>
+        <td>${t.meets || 0}</td>
+      </tr>
+    `).join("");
   }
+
+  if (detailBody) {
+    detailBody.innerHTML = rankings.map(t => `
+      <tr>
+        <td>${escapeHtml(t.name)}</td>
+        <td>${t.rank}</td>
+        <td>${Number.isFinite(t.averagePlace) ? t.averagePlace.toFixed(2) : "—"}</td>
+        <td>${Number.isFinite(t.totalScore) ? t.totalScore : "—"}</td>
+        <td>${t.meets || 0}</td>
+      </tr>
+    `).join("");
+  }
+}
+
 
   if (detailBody) {
     detailBody.innerHTML = DATA.Teams
