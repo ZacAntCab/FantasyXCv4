@@ -430,71 +430,75 @@ function averagePoints(p) {
 function getIRReplacement(team, id) {
   const teamRows = meetResults(id).filter(r => {
     const p = DATA.Players.find(
-      x =>
-        playerId(x) ===
-        resultPlayerId(r)
+      x => playerId(x) === resultPlayerId(r)
     );
 
-    return (
-      resultTeam(r, p || {}) === team
-    );
+    return resultTeam(r, p || {}) === team;
   });
 
-  const dnsCount =
-    teamRows.filter(isDNS).length;
+  const dnsCount = teamRows.filter(isDNS).length;
 
+  // No IR replacements unless the team has 3+ DNS runners.
   if (dnsCount < 3) {
-    return null;
+    return [];
   }
 
-  const eligible = meetResults(id)
+  // 3 DNS = 1 replacement
+  // 6 DNS = 2 replacements
+  // 9 DNS = 3 replacements, etc.
+  const replacementCount = Math.floor(dnsCount / 3);
+
+  const eligibleIR = meetResults(id)
     .filter(r => {
-      if (isDNS(r) || isDNF(r)) {
+      // DNS IR runners cannot be replacements.
+      if (isDNS(r)) {
         return false;
       }
 
       const p = DATA.Players.find(
-        x =>
-          playerId(x) ===
-          resultPlayerId(r)
+        x => playerId(x) === resultPlayerId(r)
       );
 
       if (!p) {
         return false;
       }
 
-      // For this meet, a blank Team on the Results row means IR.
-      // Do not use the player's current team assignment here: a later
-      // pickup should not change who was IR at an earlier meet.
+      // Blank historical Team means the runner was IR
+      // for this specific meet.
       const historicalTeam = resultTeam(r, p || {});
-      if (
-        String(historicalTeam || "").trim() !== ""
-      ) {
-        return false;
-      }
 
-      return Number.isFinite(
-        raceTimeSeconds(
-          firstValue(r, ["Time"])
-        )
-      );
-    })
+      return String(historicalTeam || "").trim() === "";
+    });
+
+  // Fastest IR finishers first.
+  const finishedIR = eligibleIR
+    .filter(r => !isDNF(r))
+    .filter(r =>
+      Number.isFinite(
+        raceTimeSeconds(firstValue(r, ["Time"]))
+      )
+    )
     .map(r => ({
       ...r,
-      _time: raceTimeSeconds(
-        firstValue(r, ["Time"])
-      ),
+      _time: raceTimeSeconds(firstValue(r, ["Time"])),
       _isIRReplacement: true
     }))
-    .sort(
-      (a, b) => a._time - b._time
-    );
+    .sort((a, b) => a._time - b._time);
 
-  return eligible.length
-    ? eligible[0]
-    : null;
+  // DNF IR runners are eligible if we need more replacements
+  // than there are IR runners who finished.
+  const dnfIR = eligibleIR
+    .filter(r => isDNF(r))
+    .map(r => ({
+      ...r,
+      _isIRReplacement: true
+    }));
+
+  return [
+    ...finishedIR,
+    ...dnfIR
+  ].slice(0, replacementCount);
 }
-
 
 // ==============================
 // TEAM MEET SCORING
@@ -538,23 +542,22 @@ function buildTeamMeet(teamName, meetId) {
   // DNF runners are always after the team's finished runners.
   const ordered = [...finished, ...dnfs];
 
-  // If the team has 3+ DNS runners, add one IR replacement.
-  const ir = getIRReplacement(teamName, meetId);
+const irReplacements = getIRReplacement(teamName, meetId);
 
-  if (ir) {
-    const irPlayer = DATA.Players.find(
-      p => playerId(p) === resultPlayerId(ir)
-    );
+irReplacements.forEach(ir => {
+  const irPlayer = DATA.Players.find(
+    p => playerId(p) === resultPlayerId(ir)
+  );
 
-    ordered.push({
-      ...ir,
-      player: irPlayer || null,
-      team: "",
-      status: resultStatus(ir),
-      racePlace: places.get(resultPlayerId(ir)) ?? null,
-      _isIRReplacement: true
-    });
-  }
+  ordered.push({
+    ...ir,
+    player: irPlayer || null,
+    team: "",
+    status: resultStatus(ir),
+    racePlace: places.get(resultPlayerId(ir)) ?? null,
+    _isIRReplacement: true
+  });
+});
 
   // The first five runners are the scoring runners.
   const scoring = ordered.slice(0, 5);
