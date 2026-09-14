@@ -1727,42 +1727,55 @@ function renderPlayers() {
   // PLAYER TABLE + SEARCH + SORT
   // ============================
 
-  function sortPlayers(players, sort) {
-    const value = (p) => {
-      if (sort === "pr") return playerPR(p);
-      if (sort === "sb") return playerSeasonBest(p);
-      if (sort === "avg") return playerAverage(p);
-      if (sort === "best") return playerBestPlace(p);
-      if (sort === "meets") return playerMeetsRan(p);
-      return String(p.Name || "").toLowerCase();
-    };
+function sortPlayers(players, sort) {
+  const value = (p) => {
+    if (sort === "pr") return playerPR(p);
+    if (sort === "sb") return playerSeasonBest(p);
+    if (sort === "avg") return playerAverage(p);
+    if (sort === "best") return playerBestPlace(p);
+    if (sort === "meets") return playerMeetsRan(p);
+    return String(p.Name || "").toLowerCase();
+  };
 
-    return [...players].sort((a, b) => {
-      const av = value(a);
-      const bv = value(b);
+  return [...players].sort((a, b) => {
+    const av = value(a);
+    const bv = value(b);
 
-      if (sort === "name") {
-        return av.localeCompare(bv);
-      }
+    if (sort === "name") {
+      return av.localeCompare(bv);
+    }
 
-      if (av === null || av === undefined || !Number.isFinite(av)) {
-        return 1;
-      }
+    const aMissing =
+      av === null ||
+      av === undefined ||
+      !Number.isFinite(av);
 
-      if (bv === null || bv === undefined || !Number.isFinite(bv)) {
-        return -1;
-      }
+    const bMissing =
+      bv === null ||
+      bv === undefined ||
+      !Number.isFinite(bv);
 
-      // Lower is better for PR, Season Best,
-      // Average Points, and Best Place.
-      // More meets is better for Meets Ran.
-      if (sort === "meets") {
-        return bv - av || String(a.Name).localeCompare(String(b.Name));
-      }
+    // No-race players go to the bottom
+    // for all performance-based sorts.
+    if (aMissing && bMissing) {
+      return String(a.Name).localeCompare(String(b.Name));
+    }
 
-      return av - bv || String(a.Name).localeCompare(String(b.Name));
-    });
-  }
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+
+    // More meets is better for Meets Ran.
+    if (sort === "meets") {
+      return bv - av ||
+        String(a.Name).localeCompare(String(b.Name));
+    }
+
+    // Lower is better for PR, Season Best,
+    // Average Points, and Best Place.
+    return av - bv ||
+      String(a.Name).localeCompare(String(b.Name));
+  });
+}
 
   // Create the sort control without requiring
   // any HTML changes to players.html.
