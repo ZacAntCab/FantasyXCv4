@@ -178,10 +178,10 @@ function resultMeetId(r) {
 // Player's fantasy team comes from the Results sheet first,
 // then falls back to the Players sheet.
 function resultTeam(r, p) {
-  // A result belongs to the fantasy team recorded for THAT meet.
-  // Do not fall back to the player's current team, because a later
-  // pickup must not be retroactively added to older meets.
-  return firstValue(r, ["Team", "Fantasy Team"]);
+  return (
+    firstValue(r, ["Team", "Fantasy Team"]) ||
+    firstValue(p, ["Team", "Fantasy Team"])
+  );
 }
 
 
@@ -427,262 +427,213 @@ function averagePoints(p) {
 // raced that meet becomes the team's
 // one IR replacement.
 
-function getIRReplacements(team, id) {
+function getIRReplacement(team, id) {
   const teamRows = meetResults(id).filter(r => {
     const p = DATA.Players.find(
-      x => playerId(x) === resultPlayerId(r)
+      x =>
+        playerId(x) ===
+        resultPlayerId(r)
     );
 
-    return resultTeam(r, p || {}) === team;
+    return (
+      resultTeam(r, p || {}) === team
+    );
   });
 
-  const dnsCount = teamRows.filter(isDNS).length;
+  const dnsCount =
+    teamRows.filter(isDNS).length;
 
-  // Every three DNS runners earns one IR replacement.
-  // 3 DNS = 1 replacement, 6 DNS = 2, 9 DNS = 3, etc.
-  const replacementCount = Math.floor(dnsCount / 3);
-
-  if (replacementCount < 1) {
-    return [];
+  if (dnsCount < 3) {
+    return null;
   }
 
-  const eligibleIR = meetResults(id)
+  const eligible = meetResults(id)
     .filter(r => {
-      // DNS runners did not participate and cannot be used.
-      if (isDNS(r)) {
+      if (isDNS(r) || isDNF(r)) {
         return false;
       }
 
       const p = DATA.Players.find(
-        x => playerId(x) === resultPlayerId(r)
+        x =>
+          playerId(x) ===
+          resultPlayerId(r)
       );
 
       if (!p) {
         return false;
       }
 
-      // Blank Team on the Results row means the runner was IR
-      // for this particular meet.
-      const historicalTeam = resultTeam(r, p || {});
+      const playerTeam = firstValue(
+        p,
+        ["Team", "Fantasy Team"]
+      );
 
-      return String(historicalTeam || '').trim() === '';
-    });
+      // Blank team = IR
+      if (
+        String(playerTeam || "").trim() !== ""
+      ) {
+        return false;
+      }
 
-  // Fastest IR finishers are preferred.
-  const finishedIR = eligibleIR
-    .filter(r => !isDNF(r))
-    .filter(r =>
-      Number.isFinite(
-        raceTimeSeconds(firstValue(r, ['Time']))
-      )
-    )
+      return Number.isFinite(
+        raceTimeSeconds(
+          firstValue(r, ["Time"])
+        )
+      );
+    })
     .map(r => ({
       ...r,
-      _time: raceTimeSeconds(firstValue(r, ['Time'])),
+      _time: raceTimeSeconds(
+        firstValue(r, ["Time"])
+      ),
       _isIRReplacement: true
     }))
-    .sort((a, b) => a._time - b._time);
+    .sort(
+      (a, b) => a._time - b._time
+    );
 
-  // DNF IR runners are eligible after all IR finishers.
-  const dnfIR = eligibleIR
-    .filter(r => isDNF(r))
-    .map(r => ({
-      ...r,
-      _isIRReplacement: true
-    }));
-
-  return [...finishedIR, ...dnfIR].slice(0, replacementCount);
+  return eligible.length
+    ? eligible[0]
+    : null;
 }
+
 
 // ==============================
 // TEAM MEET SCORING
 // ==============================
 
-function buildTeamMeet(teamName, meetId) {
-  const allResults = meetResults(meetId);
-
-  // Get every runner assigned to this fantasy team for THIS meet.
-  // Historical team assignment comes only from the Results sheet.
-  const teamResults = allResults
-    .map(r => {
-      const p = DATA.Players.find(
-        x => playerId(x) === resultPlayerId(r)
-      );
-
-      return {
-        ...r,
-        player: p || null,
-        team: resultTeam(r, p || {}),
-        status: resultStatus(r)
-      };
-    })
-    .filter(r => r.player && r.team === teamName);
-
-  const places = racePlaces(meetId);
-
-  const finished = teamResults
-    .filter(r => !isDNS(r) && !isDNF(r))
-    .map(r => ({
-      ...r,
-      racePlace: places.get(resultPlayerId(r)) ?? null
-    }))
-    .filter(r => Number.isFinite(r.racePlace))
-    .sort((a, b) => a.racePlace - b.racePlace);
-
-  const dnfs = teamResults.filter(r => isDNF(r));
-  const dns = teamResults.filter(r => isDNS(r));
-
-  // The normal scoring order is finishers first, then DNFs.
-  // DNS runners do not score.
-  const ordered = [...finished, ...dnfs];
-
-  // IR replacements are available to replace DNS slots for tie-breaking.
-  const irReplacements = getIRReplacements(teamName, meetId);
-
-  const tieBreakRunners = [...ordered];
-  const usedIR = [];
-
-  // A DNS can occupy a tie-break slot, but when an IR replacement is
-  // available, the replacement takes that DNS runner's slot.
-  const maxDnsReplacements = Math.min(
-    irReplacements.length,
-    dns.length
-  );
-
-  for (let i = 0; i < maxDnsReplacements; i++) {
-    const ir = irReplacements[i];
-    const irPlayer = DATA.Players.find(
-      p => playerId(p) === resultPlayerId(ir)
+function buildTeamMeet(team, id) {
+  const rows = meetResults(id).filter(r => {
+    const p = DATA.Players.find(
+      x =>
+        playerId(x) ===
+        resultPlayerId(r)
     );
 
-    usedIR.push({
-      ...ir,
-      player: irPlayer || null,
-      team: '',
-      status: resultStatus(ir),
-      racePlace: places.get(resultPlayerId(ir)) ?? null,
-      _isIRReplacement: true
-    });
-  }
-
-  // For the displayed team scoring, IR replacements are real runners and
-  // are placed into the team's runner order. DNS remains displayed as DNS.
-  usedIR.forEach(ir => {
-    ordered.push(ir);
+    return (
+      resultTeam(r, p || {}) === team
+    );
   });
 
-  const finalOrdered = ordered
-    .filter(r => !isDNF(r))
-    .sort((a, b) => {
-      const ap = Number.isFinite(a.racePlace) ? a.racePlace : Infinity;
-      const bp = Number.isFinite(b.racePlace) ? b.racePlace : Infinity;
-      return ap - bp;
-    })
-    .concat(ordered.filter(r => isDNF(r)));
+  // Finished runners are ordered by
+  // their actual race place.
+  const finished = rows
+    .filter(
+      r =>
+        !isDNS(r) &&
+        !isDNF(r) &&
+        raceTimeSeconds(
+          firstValue(r, ["Time"])
+        ) !== null
+    )
+    .map(r => ({
+      ...r,
+      _racePlace: racePlace(r, id)
+    }))
+    .sort(
+      (a, b) =>
+        a._racePlace - b._racePlace
+    );
 
-  finalOrdered.forEach((r, i) => {
+  // DNF counts as the last runner
+  // for team scoring.
+  const dnfs = rows.filter(isDNF);
+
+  // Check for IR replacement.
+  const ir = getIRReplacement(
+    team,
+    id
+  );
+
+  if (ir) {
+    ir._racePlace = racePlace(
+      ir,
+      id
+    );
+
+    finished.push(ir);
+
+    finished.sort(
+      (a, b) =>
+        a._racePlace - b._racePlace
+    );
+  }
+
+  const ordered =
+    finished.concat(dnfs);
+
+  // Team place is the order within
+  // that team's runners.
+  ordered.forEach((r, i) => {
     r.teamPlace = i + 1;
   });
 
-  // The first five runners score.
-  const scoring = finalOrdered.slice(0, 5);
+  // First five score.
+  const scoring =
+    ordered.slice(0, 5);
 
-  // Runners after the first five are displacers.
-  const extra = finalOrdered.slice(5);
+  // Runners 6+ are displacers.
+  const extra =
+    ordered.slice(5);
 
-  const finishedCount = places.size;
+  // DNS does not count.
+  const dns =
+    rows.filter(isDNS);
 
-  const score = scoring.reduce((sum, r) => {
-    if (Number.isFinite(r.racePlace)) {
-      return sum + r.racePlace;
-    }
-
-    if (isDNF(r)) {
-      return sum + finishedCount + 1;
-    }
-
-    return sum;
-  }, 0);
-
-  // Tie-break order is deliberately separate from scoring order.
-  // It includes DNS slots after all real runners, so a DNS at 6th/7th/etc.
-  // can be replaced by an eligible IR runner when two teams are tied.
-  const tieBreakOrder = [
-    ...finalOrdered,
-    ...dns
-  ];
-
-  // Replace DNS slots in order with the available IR replacements.
-  // This lets the tie-breaker go 6th -> 7th -> 8th until the available
-  // replacement pool is exhausted.
-  for (let i = 0; i < usedIR.length; i++) {
-    const dnsIndex = tieBreakOrder.findIndex(r => isDNS(r));
-
-    if (dnsIndex === -1) {
-      break;
-    }
-
-    tieBreakOrder[dnsIndex] = usedIR[i];
-  }
+  const score =
+    scoring.reduce(
+      (sum, r) =>
+        sum + r.teamPlace,
+      0
+    );
 
   return {
-    team: teamName,
-    score,
+    rows,
     scoring,
     extra,
-    displacers: extra,
     dns,
-    rows: teamResults,
-    ordered: finalOrdered,
-    tieBreakOrder
+    ir,
+    score
   };
 }
+
 
 // ==============================
 // TEAM SCORE DISPLAY
 // ==============================
 
 function teamFormula(td) {
-  const parts = td.scoring
-    .map(r => {
-      if (Number.isFinite(r.racePlace)) {
-        return String(r.racePlace);
-      }
+  const parts =
+    td.scoring
+      .map(r => r.teamPlace)
+      .concat(
+        td.extra.map(
+          r => `(${r.teamPlace})`
+        )
+      )
+      .concat(
+        td.dns.map(
+          () => "(DNS)"
+        )
+      );
 
-      if (isDNF(r)) {
-        return "DNF";
-      }
-
-      return "—";
-    })
-    .concat(
-      td.extra.map(r => {
-        if (Number.isFinite(r.racePlace)) {
-          return `(${r.racePlace})`;
-        }
-
-        if (isDNF(r)) {
-          return "(DNF)";
-        }
-
-        return "(—)";
-      })
-    )
-    .concat(
-      td.dns.map(() => "(DNS)")
-    );
-
-  return parts.length ? parts.join(" + ") : "—";
+  return parts.length
+    ? parts.join(" + ")
+    : "—";
 }
 
 
 function teamRunnerFormula(td) {
   const label = r => {
     const p = DATA.Players.find(
-      x => playerId(x) === resultPlayerId(r)
+      x =>
+        playerId(x) ===
+        resultPlayerId(r)
     );
 
-    const name = p ? esc(p.Name) : "Unknown Player";
+    const name = p
+      ? esc(p.Name)
+      : "Unknown Player";
 
     return r._isIRReplacement
       ? `${name} (IR Replacement)`
@@ -690,33 +641,33 @@ function teamRunnerFormula(td) {
   };
 
   return td.scoring
-    .map(r => {
-      let place = Number.isFinite(r.racePlace)
-        ? r.racePlace
-        : "DNF";
-
-      return `${place} ${label(r)}${
-        isDNF(r) ? " (DNF)" : ""
-      }`;
-    })
+    .map(
+      r =>
+        `${r.teamPlace} ${label(r)}${
+          isDNF(r)
+            ? " (DNF)"
+            : ""
+        }`
+    )
     .concat(
-      td.extra.map(r => {
-        let place = Number.isFinite(r.racePlace)
-          ? r.racePlace
-          : "DNF";
-
-        return `(${place} ${label(r)}${
-          isDNF(r) ? " (DNF)" : ""
-        })`;
-      })
+      td.extra.map(
+        r =>
+          `(${r.teamPlace} ${label(r)}${
+            isDNF(r)
+              ? " (DNF)"
+              : ""
+          })`
+      )
     )
     .concat(
       td.dns.map(
-        r => `(DNS ${label(r)})`
+        r =>
+          `(DNS ${label(r)})`
       )
     )
     .join(" + ") || "No runners";
 }
+
 
 // ==============================
 // TEAM RANKINGS
@@ -734,177 +685,130 @@ function meetIsCompleted(m) {
 }
 
 
-function teamTieBreakValue(r, finishedCount) {
-  if (!r) {
-    return null;
-  }
-
-  if (Number.isFinite(r.racePlace)) {
-    return r.racePlace;
-  }
-
-  if (isDNF(r)) {
-    // DNF is the last runner for tie-breaking too.
-    return finishedCount + 1;
-  }
-
-  return null;
-}
-
-
-function compareTeamResults(a, b, finishedCount) {
-  // First compare the normal five-runner team score.
-  if (a.score !== b.score) {
-    return a.score - b.score;
-  }
-
-  // XC tie-breaker: compare the 6th runner, then 7th, then 8th, etc.
-  // A DNF counts as the last runner. A DNS gets an IR replacement when
-  // one is available. If both runners at a slot are exactly tied, continue.
-  const aRunners = a.teamData.tieBreakOrder || [];
-  const bRunners = b.teamData.tieBreakOrder || [];
-
-  const max = Math.max(aRunners.length, bRunners.length);
-
-  for (let i = 5; i < max; i++) {
-    const av = teamTieBreakValue(aRunners[i], finishedCount);
-    const bv = teamTieBreakValue(bRunners[i], finishedCount);
-
-    if (av === null && bv === null) {
-      continue;
-    }
-
-    if (av === null) {
-      return 1;
-    }
-
-    if (bv === null) {
-      return -1;
-    }
-
-    if (av !== bv) {
-      return av - bv;
-    }
-  }
-
-  // Exact tie after every available runner has been compared.
-  return 0;
-}
-
-function meetTeamRankings(meetId) {
-  const finishedCount = racePlaces(meetId).size;
-
-  const rankings = DATA.Teams
-    .map(t => {
-      const name = firstValue(t, ['Team']);
-      const td = buildTeamMeet(name, meetId);
-
-      return {
-        name,
-        score: td.score,
-        scored: td.scoring.length >= 5,
-        teamData: td
-      };
-    })
-    .filter(x => x.scored)
-    .sort((a, b) => {
-      const tieResult = compareTeamResults(
-        a,
-        b,
-        finishedCount
-      );
-
-      // Keep exact ties adjacent without using team name to determine
-      // their official placing.
-      return tieResult;
-    });
-
-  // Competition ranking: exact ties share the same place and the next
-  // team skips ahead accordingly (1, 2, 2, 4).
-  return rankings.map((x, i, arr) => {
-    const tiedWithPrevious =
-      i > 0 &&
-      compareTeamResults(
-        x,
-        arr[i - 1],
-        finishedCount
-      ) === 0;
-
-    return {
-      ...x,
-      place: tiedWithPrevious
-        ? arr[i - 1].place
-        : i + 1
-    };
-  });
-}
-
 function teamRankings() {
-  const completed = DATA.Meets.filter(meetIsCompleted);
+  const completed =
+    DATA.Meets.filter(
+      meetIsCompleted
+    );
 
   return DATA.Teams
     .map(t => {
-      const name = firstValue(t, ["Team"]);
+      const name =
+        firstValue(
+          t,
+          ["Team"]
+        );
 
-      const meetScores = completed
-        .map(m => {
-          const meetId = firstValue(m, ["Meet ID"]);
-          const meetRanking = meetTeamRankings(meetId).find(
-            x => x.name === name
+      const meetScores =
+        completed
+          .map(m => {
+            const td =
+              buildTeamMeet(
+                name,
+                firstValue(
+                  m,
+                  ["Meet ID"]
+                )
+              );
+
+            return {
+              meetId:
+                firstValue(
+                  m,
+                  ["Meet ID"]
+                ),
+
+              meet:
+                firstValue(
+                  m,
+                  ["Meet"]
+                ),
+
+              date:
+                firstValue(
+                  m,
+                  ["Date"]
+                ),
+
+              score:
+                td.score,
+
+              // A team only receives
+              // season points from a
+              // meet when it has five
+              // scoring runners.
+              scored:
+                td.scoring.length >= 5
+            };
+          })
+          .filter(
+            x => x.scored
           );
 
-          if (!meetRanking) {
-            return null;
-          }
+      const seasonPoints =
+        meetScores.reduce(
+          (sum, x) =>
+            sum + x.score,
+          0
+        );
 
-          return {
-            meetId,
-            meet: firstValue(m, ["Meet"]),
-            date: firstValue(m, ["Date"]),
-            score: meetRanking.score,
-            teamPlace: meetRanking.place
-          };
-        })
-        .filter(Boolean);
-
-      const averagePlace = meetScores.length
-        ? meetScores.reduce((sum, x) => sum + x.teamPlace, 0) /
-          meetScores.length
-        : null;
-
-      const totalScore = meetScores.reduce(
-        (sum, x) => sum + x.score,
-        0
-      );
+      const average =
+        meetScores.length
+          ? seasonPoints /
+            meetScores.length
+          : null;
 
       return {
         name,
-        averagePlace,
-        average: averagePlace,
-        totalScore,
-        meets: meetScores.length,
+        seasonPoints,
+        average,
+        meets:
+          meetScores.length,
         meetScores
       };
     })
     .sort((a, b) => {
-      if (a.meets === 0 && b.meets !== 0) {
+      // Teams with no scored meets
+      // go to the bottom.
+      if (
+        a.meets === 0 &&
+        b.meets !== 0
+      ) {
         return 1;
       }
 
-      if (b.meets === 0 && a.meets !== 0) {
+      if (
+        b.meets === 0 &&
+        a.meets !== 0
+      ) {
         return -1;
       }
 
-      if ((a.averagePlace ?? Infinity) !== (b.averagePlace ?? Infinity)) {
-        return (a.averagePlace ?? Infinity) - (b.averagePlace ?? Infinity);
+      // Lower season points is better.
+      if (
+        a.seasonPoints !==
+        b.seasonPoints
+      ) {
+        return (
+          a.seasonPoints -
+          b.seasonPoints
+        );
       }
 
-      // Tie breaker: lower combined XC score across the same scored meets.
-      if (a.totalScore !== b.totalScore) {
-        return a.totalScore - b.totalScore;
+      // Tie breaker: lower average.
+      if (
+        (a.average ?? Infinity) !==
+        (b.average ?? Infinity)
+      ) {
+        return (
+          (a.average ?? Infinity) -
+          (b.average ?? Infinity)
+        );
       }
 
-      return a.name.localeCompare(b.name);
+      return a.name.localeCompare(
+        b.name
+      );
     })
     .map((t, i) => ({
       ...t,
@@ -1175,13 +1079,11 @@ function renderHome() {
   const teamPreview =
     document.querySelector(
       "#preview-teams"
-    ) ||
-    document.querySelector(
-      "#home-team-rankings"
     );
 
   if (teamPreview) {
-    const rankings = teamRankings();
+    const rankings =
+      teamRankings();
 
     teamPreview.innerHTML =
       rankings
@@ -1190,10 +1092,12 @@ function renderHome() {
           t =>
             `<tr>
               <td>${t.rank}</td>
-              <td>${esc(t.name)}</td>
+              <td>${esc(
+                t.name
+              )}</td>
               <td>${
                 t.meets
-                  ? t.averagePlace.toFixed(1)
+                  ? t.seasonPoints
                   : "—"
               }</td>
             </tr>`
@@ -1223,237 +1127,360 @@ function renderPlayers() {
       "#profile"
     );
 
+  if (!table || !profile) {
+    return;
+  }
 
   const selected =
     new URLSearchParams(
       location.search
     ).get("player");
 
-  const p =
-    DATA.Players.find(
-      x =>
-        playerId(x) ===
-        selected
+  const selectedPlayer = DATA.Players.find(
+    p => playerId(p) === selected
+  );
+
+  // ============================
+  // PLAYER COMPARISON HELPERS
+  // ============================
+
+  function playerPR(p) {
+    return raceTimeSeconds(
+      firstValue(p, ["PR", "5K PR"])
     );
+  }
 
+  function playerSeasonBest(p) {
+    const value = seasonBest(p);
+    return raceTimeSeconds(value);
+  }
 
-  // ============================
-  // INDIVIDUAL PLAYER PROFILE
-  // ============================
+  function playerAverage(p) {
+    const value = Number(averagePoints(p));
+    return Number.isFinite(value) ? value : null;
+  }
 
-  if (p) {
-    const results =
-      DATA.Results
-        .filter(
-          r =>
-            resultPlayerId(r) ===
-            playerId(p)
-        )
-        .sort(
-          (a, b) =>
+  function playerBestPlace(p) {
+    const places = pointsForPlayer(p);
+    return places.length
+      ? Math.min(...places)
+      : null;
+  }
+
+  function playerMeetsRan(p) {
+    return DATA.Results.filter(
+      r =>
+        resultPlayerId(r) === playerId(p) &&
+        !isDNS(r)
+    ).length;
+  }
+
+  function playerResultRows(p) {
+    return DATA.Results
+      .filter(
+        r => resultPlayerId(r) === playerId(p)
+      )
+      .sort(
+        (a, b) =>
+          String(
+            meetDate(resultMeetId(b))
+          ).localeCompare(
             String(
-              meetDate(
-                resultMeetId(b)
-              )
-            ).localeCompare(
-              String(
-                meetDate(
-                  resultMeetId(a)
-                )
-              )
+              meetDate(resultMeetId(a))
             )
-        );
+          )
+      );
+  }
 
+  function comparisonMeetHistory(p) {
+    const results = playerResultRows(p);
 
-    const rows =
-      results.length
-        ? results
-            .map(r => {
-              const status =
-                resultStatus(r);
+    if (!results.length) {
+      return `<div class="team-empty">No meet results yet.</div>`;
+    }
 
-              let place =
-                racePlace(
-                  r,
-                  resultMeetId(r)
-                );
+    return `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Meet</th>
+              <th>Team</th>
+              <th>Time</th>
+              <th>Place / Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${results.map(r => {
+              const status = resultStatus(r);
+              const place = racePlace(
+                r,
+                resultMeetId(r)
+              );
 
-              let scoreDisplay =
-                "—";
+              let scoreDisplay = "—";
 
               if (status === "DNS") {
-                scoreDisplay =
-                  "DNS";
-              } else if (
-                status === "DNF"
-              ) {
-                scoreDisplay =
-                  "DNF";
-              } else if (
-                Number.isFinite(place)
-              ) {
-                scoreDisplay =
-                  String(place);
+                scoreDisplay = "DNS";
+              } else if (status === "DNF") {
+                scoreDisplay = "DNF";
+              } else if (Number.isFinite(place)) {
+                scoreDisplay = String(place);
               }
+
+              const pTeam = DATA.Players.find(
+                x =>
+                  playerId(x) ===
+                  resultPlayerId(r)
+              );
 
               return `
                 <tr>
-                  <td>${esc(
-                    meetName(
-                      resultMeetId(r)
-                    )
-                  )}</td>
-
-                  <td>${esc(
-                    meetDate(
-                      resultMeetId(r)
-                    )
-                  )}</td>
-
-                  <td>${esc(
-                    resultTeam(r, p) ||
-                    "IR / Unassigned"
-                  )}</td>
-
-                  <td>${esc(
-                    firstValue(
-                      r,
-                      ["Time"]
-                    ) || status
-                  )}</td>
-
-                  <td>${esc(
-                    scoreDisplay
-                  )}</td>
+                  <td>${esc(meetName(resultMeetId(r)))}</td>
+                  <td>${esc(resultTeam(r, pTeam || {}) || "IR / Unassigned")}</td>
+                  <td>${esc(firstValue(r, ["Time"]) || status)}</td>
+                  <td>${esc(scoreDisplay)}</td>
                 </tr>
               `;
-            })
-            .join("")
-        : `
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function comparisonPanel(otherId) {
+    const other = DATA.Players.find(
+      p => playerId(p) === otherId
+    );
+
+    if (!selectedPlayer || !other) {
+      return "";
+    }
+
+    const leftTeam =
+      firstValue(selectedPlayer, ["Team", "Fantasy Team"]) ||
+      "IR / Unassigned";
+
+    const rightTeam =
+      firstValue(other, ["Team", "Fantasy Team"]) ||
+      "IR / Unassigned";
+
+    const rows = [
+      ["Team", leftTeam, rightTeam],
+      ["Grade", firstValue(selectedPlayer, ["Grade"]) || "—", firstValue(other, ["Grade"]) || "—"],
+      ["PR", firstValue(selectedPlayer, ["PR", "5K PR"]) || "—", firstValue(other, ["PR", "5K PR"]) || "—"],
+      ["Season Best", seasonBest(selectedPlayer), seasonBest(other)],
+      ["Average Points", averagePoints(selectedPlayer), averagePoints(other)],
+      ["Best Place", playerBestPlace(selectedPlayer) ?? "—", playerBestPlace(other) ?? "—"],
+      ["Meets Ran", playerMeetsRan(selectedPlayer), playerMeetsRan(other)]
+    ];
+
+    return `
+      <div id="player-compare-panel" class="panel" style="margin-top: 1rem;">
+        <div class="profile-heading">
+          <div>
+            <h3>Compare Athletes</h3>
+            <p>${esc(selectedPlayer.Name)} vs. ${esc(other.Name)}</p>
+          </div>
+          <button type="button" id="close-player-compare" class="back-link">Close</button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Stat</th>
+                <th>${esc(selectedPlayer.Name)}</th>
+                <th>${esc(other.Name)}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(row => `
+                <tr>
+                  <td><strong>${esc(row[0])}</strong></td>
+                  <td>${esc(row[1])}</td>
+                  <td>${esc(row[2])}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid" style="margin-top: 1rem;">
+          <div class="card">
+            <div class="label">${esc(selectedPlayer.Name)}</div>
+            ${comparisonMeetHistory(selectedPlayer)}
+          </div>
+          <div class="card">
+            <div class="label">${esc(other.Name)}</div>
+            ${comparisonMeetHistory(other)}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function wireCompareButton() {
+    const button = document.querySelector(
+      "#compare-player-button"
+    );
+    const panelHost = document.querySelector(
+      "#player-compare-host"
+    );
+
+    if (!button || !panelHost) {
+      return;
+    }
+
+    button.addEventListener("click", () => {
+      if (panelHost.innerHTML.trim()) {
+        panelHost.innerHTML = "";
+        button.textContent = "Compare";
+        return;
+      }
+
+      panelHost.innerHTML = `
+        <div class="panel" style="margin-top: 1rem;">
+          <h3>Choose another athlete</h3>
+          <select id="compare-player-select" style="width:100%; max-width: 420px; padding: .65rem;">
+            <option value="">Select an athlete...</option>
+            ${DATA.Players
+              .filter(p => playerId(p) !== playerId(selectedPlayer))
+              .sort((a, b) => String(a.Name).localeCompare(String(b.Name)))
+              .map(p => `
+                <option value="${esc(playerId(p))}">${esc(p.Name)}</option>
+              `)
+              .join("")}
+          </select>
+          <div id="compare-result"></div>
+        </div>
+      `;
+
+      button.textContent = "Hide Compare";
+
+      const select = document.querySelector(
+        "#compare-player-select"
+      );
+      const result = document.querySelector(
+        "#compare-result"
+      );
+
+      if (select && result) {
+        select.addEventListener("change", () => {
+          result.innerHTML = select.value
+            ? comparisonPanel(select.value)
+            : "";
+
+          const close = document.querySelector(
+            "#close-player-compare"
+          );
+
+          if (close) {
+            close.addEventListener("click", () => {
+              panelHost.innerHTML = "";
+              button.textContent = "Compare";
+            });
+          }
+        });
+      }
+    });
+  }
+
+  // ============================
+  // SELECTED PLAYER PROFILE
+  // ============================
+
+  if (selectedPlayer) {
+    const p = selectedPlayer;
+    const results = playerResultRows(p);
+
+    const rows = results.length
+      ? results.map(r => {
+          const status = resultStatus(r);
+          const place = racePlace(
+            r,
+            resultMeetId(r)
+          );
+
+          let scoreDisplay = "—";
+
+          if (status === "DNS") {
+            scoreDisplay = "DNS";
+          } else if (status === "DNF") {
+            scoreDisplay = "DNF";
+          } else if (Number.isFinite(place)) {
+            scoreDisplay = String(place);
+          }
+
+          return `
+            <tr>
+              <td>${esc(meetName(resultMeetId(r)))}</td>
+              <td>${esc(meetDate(resultMeetId(r)))}</td>
+              <td>${esc(resultTeam(r, p) || "IR / Unassigned")}</td>
+              <td>${esc(firstValue(r, ["Time"]) || status)}</td>
+              <td>${esc(scoreDisplay)}</td>
+            </tr>
+          `;
+        }).join("")
+      : `
           <tr>
-            <td colspan="5">
-              No meet results entered yet.
-            </td>
+            <td colspan="5">No meet results entered yet.</td>
           </tr>
         `;
-
 
     const fantasyTeam =
       firstValue(
         p,
-        [
-          "Team",
-          "Fantasy Team"
-        ]
+        ["Team", "Fantasy Team"]
       ) ||
       "IR / Unassigned";
-
 
     profile.innerHTML = `
       <div class="profile-heading">
         <div>
-          <h2>${esc(
-            p.Name
-          )}</h2>
-
+          <h2>${esc(p.Name)}</h2>
           <p>Player Profile</p>
         </div>
-
-        <a
-          class="back-link"
-          href="players.html"
-        >
-          ← All Players
-        </a>
+        <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
+          <button type="button" id="compare-player-button" class="back-link">Compare</button>
+          <a class="back-link" href="players.html">← All Players</a>
+        </div>
       </div>
-
 
       <div class="grid">
-
         <div class="card">
-          <div class="label">
-            Fantasy Team
-          </div>
-
-          <div class="value">
-            ${esc(
-              fantasyTeam
-            )}
-          </div>
+          <div class="label">Fantasy Team</div>
+          <div class="value">${esc(fantasyTeam)}</div>
         </div>
 
-
         <div class="card">
-          <div class="label">
-            Grade
-          </div>
-
-          <div class="value">
-            ${esc(
-              firstValue(
-                p,
-                ["Grade"]
-              )
-            )}
-          </div>
+          <div class="label">Grade</div>
+          <div class="value">${esc(firstValue(p, ["Grade"]))}</div>
         </div>
 
-
         <div class="card">
-          <div class="label">
-            PR
-          </div>
-
-          <div class="value">
-            ${esc(
-              firstValue(
-                p,
-                [
-                  "PR",
-                  "5K PR"
-                ]
-              )
-            )}
-          </div>
+          <div class="label">PR</div>
+          <div class="value">${esc(firstValue(p, ["PR", "5K PR"]))}</div>
         </div>
 
-
         <div class="card">
-          <div class="label">
-            Season Best
-          </div>
-
-          <div class="value">
-            ${esc(
-              seasonBest(p)
-            )}
-          </div>
+          <div class="label">Season Best</div>
+          <div class="value">${esc(seasonBest(p))}</div>
         </div>
 
-
         <div class="card">
-          <div class="label">
-            Average Points
-          </div>
-
-          <div class="value">
-            ${esc(
-              averagePoints(p)
-            )}
-          </div>
+          <div class="label">Average Points</div>
+          <div class="value">${esc(averagePoints(p))}</div>
         </div>
-
       </div>
 
+      <div id="player-compare-host"></div>
 
       <div class="panel profile-meets">
-
         <h3>Meets Raced</h3>
-
         <div class="table-wrap">
-
           <table>
-
             <thead>
               <tr>
                 <th>Meet</th>
@@ -1463,146 +1490,138 @@ function renderPlayers() {
                 <th>Place / Score</th>
               </tr>
             </thead>
-
-            <tbody>
-              ${rows}
-            </tbody>
-
+            <tbody>${rows}</tbody>
           </table>
-
         </div>
-
       </div>
     `;
 
+    wireCompareButton();
   } else {
-
     profile.innerHTML = `
       <h2>Select A Player</h2>
-
-      <p>
-        Click a player name below to open
-        their full profile.
-      </p>
+      <p>Click a player name below to open their full profile.</p>
     `;
   }
 
+  // ============================
+  // PLAYER TABLE + SEARCH + SORT
+  // ============================
 
-  // ============================
-  // PLAYER TABLE
-  // ============================
+  function sortPlayers(players, sort) {
+    const value = (p) => {
+      if (sort === "pr") return playerPR(p);
+      if (sort === "sb") return playerSeasonBest(p);
+      if (sort === "avg") return playerAverage(p);
+      if (sort === "best") return playerBestPlace(p);
+      if (sort === "meets") return playerMeetsRan(p);
+      return String(p.Name || "").toLowerCase();
+    };
+
+    return [...players].sort((a, b) => {
+      const av = value(a);
+      const bv = value(b);
+
+      if (sort === "name") {
+        return av.localeCompare(bv);
+      }
+
+      if (av === null || av === undefined || !Number.isFinite(av)) {
+        return 1;
+      }
+
+      if (bv === null || bv === undefined || !Number.isFinite(bv)) {
+        return -1;
+      }
+
+      // Lower is better for PR, Season Best,
+      // Average Points, and Best Place.
+      // More meets is better for Meets Ran.
+      if (sort === "meets") {
+        return bv - av || String(a.Name).localeCompare(String(b.Name));
+      }
+
+      return av - bv || String(a.Name).localeCompare(String(b.Name));
+    });
+  }
+
+  // Create the sort control without requiring
+  // any HTML changes to players.html.
+  let sortSelect = document.querySelector(
+    "#player-sort"
+  );
+
+  if (!sortSelect && q) {
+    sortSelect = document.createElement("select");
+    sortSelect.id = "player-sort";
+    sortSelect.setAttribute("aria-label", "Sort players");
+    sortSelect.style.margin = "0 0 1rem 0";
+    sortSelect.style.padding = ".6rem";
+    sortSelect.style.width = "100%";
+    sortSelect.style.maxWidth = "320px";
+    sortSelect.innerHTML = `
+      <option value="name">Sort: Name</option>
+      <option value="pr">Sort: PR (lowest)</option>
+      <option value="sb">Sort: Season Best (lowest)</option>
+      <option value="avg">Sort: Average Points (lowest)</option>
+      <option value="best">Sort: Best Score / Place (lowest)</option>
+      <option value="meets">Sort: Meets Ran (most)</option>
+    `;
+
+    q.parentNode.insertBefore(
+      sortSelect,
+      q.nextSibling
+    );
+  }
 
   function draw() {
     const term =
-      (q.value || "")
+      (q ? q.value : "")
         .toLowerCase()
         .trim();
 
+    const sort =
+      sortSelect
+        ? sortSelect.value
+        : "name";
+
+    const filtered = DATA.Players.filter(p => {
+      const searchable = [
+        p.Name,
+        firstValue(p, ["Team", "Fantasy Team"]),
+        firstValue(p, ["Grade"]),
+        firstValue(p, ["PR", "5K PR"]),
+        firstValue(p, ["Season Best"])
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return searchable.includes(term);
+    });
+
     table.innerHTML =
-      DATA.Players
-        .filter(p => {
-          const searchable = [
-            p.Name,
-
-            // IMPORTANT:
-            // Fantasy Team is included
-            // in the search.
-            firstValue(
-              p,
-              [
-                "Team",
-                "Fantasy Team"
-              ]
-            ),
-
-            firstValue(
-              p,
-              ["Grade"]
-            ),
-
-            firstValue(
-              p,
-              [
-                "PR",
-                "5K PR"
-              ]
-            ),
-
-            firstValue(
-              p,
-              ["Season Best"]
-            )
-          ]
-            .join(" ")
-            .toLowerCase();
-
-          return searchable.includes(
-            term
-          );
-        })
+      sortPlayers(filtered, sort)
         .map(p => {
           const fantasyTeam =
             firstValue(
               p,
-              [
-                "Team",
-                "Fantasy Team"
-              ]
+              ["Team", "Fantasy Team"]
             ) ||
             "IR / Unassigned";
 
           return `
             <tr>
-
-              <td>
-                ${playerLink(p)}
-              </td>
-
-              <td>
-                ${esc(
-                  fantasyTeam
-                )}
-              </td>
-
-              <td>
-                ${esc(
-                  firstValue(
-                    p,
-                    ["Grade"]
-                  )
-                )}
-              </td>
-
-              <td>
-                ${esc(
-                  firstValue(
-                    p,
-                    [
-                      "PR",
-                      "5K PR"
-                    ]
-                  )
-                )}
-              </td>
-
-              <td>
-                ${esc(
-                  seasonBest(p)
-                )}
-              </td>
-
-              <td>
-                ${esc(
-                  averagePoints(p)
-                )}
-              </td>
-
+              <td>${playerLink(p)}</td>
+              <td>${esc(fantasyTeam)}</td>
+              <td>${esc(firstValue(p, ["Grade"]))}</td>
+              <td>${esc(firstValue(p, ["PR", "5K PR"]))}</td>
+              <td>${esc(seasonBest(p))}</td>
+              <td>${esc(averagePoints(p))}</td>
             </tr>
           `;
         })
         .join("");
   }
-
 
   if (q) {
     q.addEventListener(
@@ -1611,15 +1630,15 @@ function renderPlayers() {
     );
   }
 
+  if (sortSelect) {
+    sortSelect.addEventListener(
+      "change",
+      draw
+    );
+  }
+
   draw();
 }
-
-
-function ordinalSuffix(n) {
-  if (n % 100 >= 11 && n % 100 <= 13) return "th";
-  return n % 10 === 1 ? "st" : n % 10 === 2 ? "nd" : n % 10 === 3 ? "rd" : "th";
-}
-
 
 // ==============================
 // TEAMS PAGE
@@ -1627,119 +1646,206 @@ function ordinalSuffix(n) {
 
 function renderTeams() {
   const rankingBody =
-    document.querySelector("#team-ranking-rows") ||
-    document.querySelector("#ranking-rows");
+    document.querySelector(
+      "#team-ranking-rows"
+    );
 
   const detailBody =
-    document.querySelector("#team-rows") ||
-    document.querySelector("#teams-rows");
+    document.querySelector(
+      "#team-rows"
+    );
 
-  const rankings = teamRankings();
+  const rankings =
+    teamRankings();
+
+
+  // ============================
+  // TEAM RANKINGS
+  // ============================
 
   if (rankingBody) {
     rankingBody.innerHTML =
       rankings
         .map(t => {
           const avg =
-            t.averagePlace === null
+            t.average === null
               ? "—"
-              : t.averagePlace.toFixed(1);
+              : t.average.toFixed(
+                  1
+                );
 
           return `
             <tr>
-              <td><strong>${t.rank}</strong></td>
-              <td><strong>${esc(t.name)}</strong></td>
-              <td>${avg}</td>
-              <td>${t.meets}</td>
+
+              <td>
+                <strong>
+                  ${t.rank}
+                </strong>
+              </td>
+
+              <td>
+                <strong>
+                  ${esc(
+                    t.name
+                  )}
+                </strong>
+              </td>
+
+              <td>
+                ${
+                  t.meets
+                    ? t.seasonPoints
+                    : "—"
+                }
+              </td>
+
+              <td>
+                ${avg}
+              </td>
+
+              <td>
+                ${t.meets}
+              </td>
+
             </tr>
           `;
         })
         .join("") ||
       `
         <tr>
-          <td colspan="4">No teams found.</td>
+          <td colspan="5">
+            No teams found.
+          </td>
         </tr>
       `;
   }
 
+
+  // ============================
+  // TEAM DETAILS
+  // ============================
+
   if (detailBody) {
-    detailBody.innerHTML = DATA.Teams
-      .map(t => {
-        const name = firstValue(t, ["Team"]);
-        const m1 = firstValue(t, ["Manager 1", "Manager"]);
-        const m2 = firstValue(t, ["Manager 2"]);
-        const ranking = rankings.find(x => x.name === name);
+    detailBody.innerHTML =
+      DATA.Teams
+        .map(t => {
+          const name =
+            firstValue(
+              t,
+              ["Team"]
+            );
 
-        const roster = DATA.Players
-          .filter(p =>
-            firstValue(p, ["Team", "Fantasy Team"]) === name
-          )
-          .map(playerLink)
-          .join("") ||
-          `<span class="team-empty">No players listed</span>`;
+          const m1 =
+            firstValue(
+              t,
+              [
+                "Manager 1",
+                "Manager"
+              ]
+            );
 
-        const meetHistory =
-          ranking && ranking.meetScores.length
-            ? ranking.meetScores
-                .map(x => `
-                  <div class="team-meet-result">
-                    <span>${esc(x.meet)}</span>
-                    <strong>${x.teamPlace}${ordinalSuffix(x.teamPlace)}</strong>
-                    <span>${x.score} pts</span>
-                  </div>
-                `)
-                .join("")
-            : `<div class="team-empty">No completed meet results yet.</div>`;
+          const m2 =
+            firstValue(
+              t,
+              ["Manager 2"]
+            );
 
-        const average =
-          ranking && ranking.averagePlace !== null
-            ? ranking.averagePlace.toFixed(1)
-            : "—";
+          const ranking =
+            rankings.find(
+              x =>
+                x.name === name
+            );
 
-        return `
-          <article class="team-card">
-            <div class="team-card-header">
-              <div>
-                <div class="team-card-kicker">Team</div>
-                <h3>${esc(name)}</h3>
-              </div>
-              <div class="team-rank-badge">
-                ${ranking ? `#${ranking.rank}` : "—"}
-              </div>
-            </div>
+          const roster =
+            DATA.Players
+              .filter(
+                p =>
+                  firstValue(
+                    p,
+                    [
+                      "Team",
+                      "Fantasy Team"
+                    ]
+                  ) === name
+              )
+              .map(playerLink)
+              .join(", ") ||
+            "No players listed";
 
-            <div class="team-card-meta">
-              <div>
-                <span>Managers</span>
-                <strong>${esc([m1, m2].filter(Boolean).join(" & ") || "—")}</strong>
-              </div>
-              <div>
-                <span>Average Place</span>
-                <strong>${average}</strong>
-              </div>
-              <div>
-                <span>Meets Scored</span>
-                <strong>${ranking ? ranking.meets : 0}</strong>
-              </div>
-            </div>
 
-            <div class="team-card-section">
-              <h4>Current Roster</h4>
-              <div class="team-roster-grid">
+          const meetHistory =
+            ranking &&
+            ranking.meetScores.length
+              ? ranking.meetScores
+                  .map(
+                    x =>
+                      `${esc(
+                        x.meet
+                      )}: <strong>${
+                        x.score
+                      }</strong>`
+                  )
+                  .join(" · ")
+              : "No completed meet scores yet";
+
+
+          return `
+            <tr>
+
+              <td>
+                <strong>
+                  ${esc(name)}
+                </strong>
+              </td>
+
+              <td>
+                ${esc(m1)}
+              </td>
+
+              <td>
+                ${esc(m2)}
+              </td>
+
+              <td>
+                ${
+                  ranking
+                    ? ranking.rank
+                    : "—"
+                }
+              </td>
+
+              <td>
+                ${
+                  ranking &&
+                  ranking.meets
+                    ? ranking.seasonPoints
+                    : "—"
+                }
+              </td>
+
+              <td>
+                ${
+                  ranking &&
+                  ranking.average !== null
+                    ? ranking.average.toFixed(
+                        1
+                      )
+                    : "—"
+                }
+              </td>
+
+              <td>
                 ${roster}
-              </div>
-            </div>
 
-            <div class="team-card-section">
-              <h4>Meet History</h4>
-              <div class="team-meet-results">
-                ${meetHistory}
-              </div>
-            </div>
-          </article>
-        `;
-      })
-      .join("");
+                <div class="team-history">
+                  ${meetHistory}
+                </div>
+              </td>
+
+            </tr>
+          `;
+        })
+        .join("");
   }
 }
 
@@ -1761,17 +1867,8 @@ function renderPastMeets() {
   const container =
     document.querySelector(
       "#past-rows"
-    ) ||
-    document.querySelector(
-      "#past-meet-rows"
-    ) ||
-    document.querySelector(
-      "#meet-rows"
     );
 
-  if (!container) {
-    return;
-  }
 
   container.innerHTML =
     completed
@@ -1914,8 +2011,6 @@ function renderPastMeets() {
         // TEAM SCORE CARDS
         // ========================
 
-        const meetRanks = meetTeamRankings(mid);
-
         const cards =
           names
             .map(team => {
@@ -1936,21 +2031,26 @@ function renderPastMeets() {
                 <div class="team-score">
 
                   <div class="team-score-head">
-                    <div>
-                      <strong>${esc(team)}</strong>
-                      ${
-                        (() => {
-                          const standing = meetRanks.find(x => x.name === team);
-                          return standing
-                            ? `<span class="team-place-badge">${standing.place}${ordinalSuffix(standing.place)} Place</span>`
-                            : `<span class="team-place-badge team-place-incomplete">Incomplete</span>`;
-                        })()
-                      }
-                    </div>
 
                     <strong>
-                      ${td.score || "—"} pts
+                      ${esc(team)}
                     </strong>
+
+                    <strong>
+                      ${
+                        td.score ||
+                        "—"
+                      }
+                      pts
+
+                      ${
+                        td.scoring
+                          .length < 5
+                          ? " · incomplete"
+                          : ""
+                      }
+                    </strong>
+
                   </div>
 
 
