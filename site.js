@@ -1112,6 +1112,128 @@ function renderHome() {
 // ==============================
 
 function renderPlayers() {
+  // Player-page polish for the Compare and Sort controls.
+  // Kept local to this page so existing site styling/functionality is untouched.
+  if (!document.querySelector("#player-upgrade-styles")) {
+    const style = document.createElement("style");
+    style.id = "player-upgrade-styles";
+    style.textContent = `
+      #player-sort {
+        box-sizing: border-box;
+        min-height: 42px;
+        margin: .75rem 0 1rem;
+        padding: .65rem 2.4rem .65rem .8rem;
+        border: 1px solid rgba(0,0,0,.16);
+        border-radius: 8px;
+        background: #fff;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      #player-sort:focus,
+      #compare-player-select:focus {
+        outline: 2px solid currentColor;
+        outline-offset: 1px;
+      }
+
+      .player-profile-actions {
+        display: flex;
+        gap: .55rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .player-action-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 40px;
+        padding: .55rem .9rem;
+        border: 1px solid rgba(0,0,0,.16);
+        border-radius: 8px;
+        background: #fff;
+        color: inherit;
+        font: inherit;
+        font-weight: 600;
+        line-height: 1.2;
+        text-decoration: none;
+        cursor: pointer;
+        box-sizing: border-box;
+        transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+      }
+
+      .player-action-button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 7px rgba(0,0,0,.12);
+      }
+
+      .player-action-button:active {
+        transform: translateY(0);
+      }
+
+      .player-compare-picker {
+        margin-top: 1rem;
+      }
+
+      .player-compare-picker h3 {
+        margin-top: 0;
+        margin-bottom: .35rem;
+      }
+
+      .player-compare-picker p {
+        margin-top: 0;
+      }
+
+      #compare-player-select {
+        width: 100%;
+        max-width: 460px;
+        min-height: 42px;
+        padding: .65rem .8rem;
+        border: 1px solid rgba(0,0,0,.16);
+        border-radius: 8px;
+        background: #fff;
+        color: inherit;
+        font: inherit;
+        box-sizing: border-box;
+        cursor: pointer;
+      }
+
+      .player-compare-panel {
+        margin-top: 1rem;
+      }
+
+      .player-compare-panel .profile-heading {
+        gap: 1rem;
+      }
+
+      .player-compare-panel .table-wrap {
+        margin-top: .75rem;
+      }
+
+      .player-compare-history {
+        margin-top: 1rem;
+      }
+
+      @media (max-width: 600px) {
+        .player-profile-actions {
+          width: 100%;
+        }
+
+        .player-profile-actions .player-action-button {
+          flex: 1 1 auto;
+        }
+
+        #player-sort,
+        #compare-player-select {
+          max-width: none;
+          width: 100%;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
   const q =
     document.querySelector(
       "#player-search"
@@ -1277,13 +1399,13 @@ function renderPlayers() {
     ];
 
     return `
-      <div id="player-compare-panel" class="panel" style="margin-top: 1rem;">
+      <div id="player-compare-panel" class="panel player-compare-panel">
         <div class="profile-heading">
           <div>
             <h3>Compare Athletes</h3>
             <p>${esc(selectedPlayer.Name)} vs. ${esc(other.Name)}</p>
           </div>
-          <button type="button" id="close-player-compare" class="back-link">Close</button>
+          <button type="button" id="close-player-compare" class="player-action-button">Close</button>
         </div>
 
         <div class="table-wrap">
@@ -1307,7 +1429,7 @@ function renderPlayers() {
           </table>
         </div>
 
-        <div class="grid" style="margin-top: 1rem;">
+        <div class="grid player-compare-history">
           <div class="card">
             <div class="label">${esc(selectedPlayer.Name)}</div>
             ${comparisonMeetHistory(selectedPlayer)}
@@ -1341,9 +1463,10 @@ function renderPlayers() {
       }
 
       panelHost.innerHTML = `
-        <div class="panel" style="margin-top: 1rem;">
+        <div class="panel player-compare-picker">
           <h3>Choose another athlete</h3>
-          <select id="compare-player-select" style="width:100%; max-width: 420px; padding: .65rem;">
+          <p>Select an athlete to compare side-by-side.</p>
+          <select id="compare-player-select">
             <option value="">Select an athlete...</option>
             ${DATA.Players
               .filter(p => playerId(p) !== playerId(selectedPlayer))
@@ -1442,9 +1565,9 @@ function renderPlayers() {
           <h2>${esc(p.Name)}</h2>
           <p>Player Profile</p>
         </div>
-        <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
-          <button type="button" id="compare-player-button" class="back-link">Compare</button>
-          <a class="back-link" href="players.html">← All Players</a>
+        <div class="player-profile-actions">
+          <button type="button" id="compare-player-button" class="player-action-button">Compare</button>
+          <a class="player-action-button" href="players.html">← All Players</a>
         </div>
       </div>
 
@@ -1555,11 +1678,7 @@ function renderPlayers() {
     sortSelect = document.createElement("select");
     sortSelect.id = "player-sort";
     sortSelect.setAttribute("aria-label", "Sort players");
-    sortSelect.style.margin = "0 0 1rem 0";
-    sortSelect.style.padding = ".6rem";
-    sortSelect.style.width = "100%";
-    sortSelect.style.maxWidth = "320px";
-    sortSelect.innerHTML = `
+        sortSelect.innerHTML = `
       <option value="name">Sort: Name</option>
       <option value="pr">Sort: PR (lowest)</option>
       <option value="sb">Sort: Season Best (lowest)</option>
